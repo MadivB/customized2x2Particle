@@ -1,0 +1,280 @@
+import ROOT
+import random, math
+import numpy as np
+import matplotlib.pyplot as plt
+from array import array
+
+# Number of events per file and number of files to produce.
+n_events_per_file = 100
+n_files = 10
+# Maximum number of particles per event
+kNPmax = 3 #Shall be at least 3, the first 2 are initial neucleus and a neutrino
+n_particles = kNPmax #Note that the maximum number of particles allowed are not necessarily the total number of FINAL STATE Particle+initial state neutrino, if we define n_particles to be smaller than max particle, all the other ones will automatically became intermediate particles (but up to this point, I have not written methods to parent and daughter association has not yet been properly associated)
+vertexX = np.full(n_events_per_file, 0.15) #This decides the vertex of the process, note that this is the only quantity in meter scale. Most other quantities are in fm (which is used to calculate the intranucleus distributions)
+vertexY = np.full(n_events_per_file, 0.15) #For now, all values are in 0.15
+vertexZ = np.full(n_events_per_file, 0.15)
+# Use a simple dictionary for masses and a PDG list.
+# Here, all particles are muons (PDG = 13) with a mass of 0.10566 GeV.
+#mass_dict = { 13: 0.10566 }
+mass_dict = { 13: 0.10566, 11: 0.000511 }
+pdg_choices = [13, 13, 11, 11]
+#LeptonEnergies = [0.002,0.02,0.2,2,20]
+LeptonDirections = [
+    (0., 0),                   # Straight up
+    (math.pi, 0),             # Straight down
+    (math.pi / 2, 0),         # Along +X axis
+    (math.pi / 2, math.pi),   # Along -X axis
+    (math.pi / 2, math.pi / 2),  # Along +Y axis
+    (math.pi / 2, 3 * math.pi / 2)  # Along -Y axis
+]
+
+
+
+for file_index in range(n_files):
+    # Create a file name with 7-digit zero-padded file index.
+    filename = "Tutorial.genie.nu.{:07d}.GTRAC.root".format(file_index)
+    outfile = ROOT.TFile(filename, "RECREATE")
+    tree = ROOT.TTree("gRooTracker", "Realistic Fake GTRAC file")
+    
+    # (Optional) Set the tree weight if desired.
+    tree.SetWeight(1e16)
+    
+    # -------------------------------
+    # Create object branches (TBits and TObjString)
+    # -------------------------------
+    # Create a TBits with 16 bits. We then reset all bits so that fAllBits remains 0.
+    evtFlags = ROOT.TBits(16)
+    evtFlags.ResetAllBits()  # Ensure all bits are cleared.
+    
+    # Set the event code to a fixed string.
+    #evtCode = ROOT.TObjString("nu:-14;tgt:1000260560;N:2112;q:2(v);proc:Weak[CC],DIS;")
+    evtCode = ROOT.TObjString("nu:14;tgt:1000180400;N:2112;q:1(v);proc:Weak[CC],DIS;") #Note that argon nucleus can potentially under go 'nu:-14;tgt:1000180400;N:2112;proc:Weak[NC],RES;res:1;' In which case evtKPS must also be adjusted to 23 
+    # -------------------------------
+    # Create event-level leaf branches (scalar variables)
+    # -------------------------------
+    evtNum   = array("i", [0])
+    evtKPS   = array("i", [10])    #Shall be 23 if we consider resonant elastic scattering 
+    evtXSec  = array("d", [0.0])   # cross section in 1e-38 cm^2 units (lognormal)
+    evtDXSec = array("d", [0.0])   # differential cross section in 1e-38 cm^2/Kn (unchanged)
+    evtWght  = array("d", [0.0])   # event weight (we keep this as a branch, though tree weight is set)
+    evtProb  = array("d", [0.0])   # event probability (lognormal)
+    # EvtVtx is a 4-vector: x, y, z in meters, t in seconds (SI units)
+    evtVtx   = array("d", [0.0, 0.0, 0.0, 0.0])
+    
+    # -------------------------------
+    # Create particle-level leaf branches.
+    # These are arrays with kNPmax elements (or kNPmax*#components for vectors)
+    # -------------------------------
+    stdHepN      = array("i", [0])                # number of particles in this event
+    stdHepPdg    = array("i", [0] * kNPmax)         # PDG code for each particle
+    stdHepStatus = array("i", [0] * kNPmax)         # status code for each particle
+    stdHepRescat = array("i", [0] * kNPmax)         # rescattering code for each particle
+    
+    # For the 4-vectors (position and momentum), create flat arrays of size kNPmax*4.
+    stdHepX4 = array("d", [0.0] * (kNPmax * 4))      # 4-position in fm (x, y, z, t)
+    stdHepP4 = array("d", [0.0] * (kNPmax * 4))      # 4-momentum in GeV (px, py, pz, E)
+    
+    # For polarization, an array of size kNPmax*3 (3-vector per particle)
+    stdHepPolz = array("d", [0.0] * (kNPmax * 3))
+    
+    # Daughter and mother indices: arrays of kNPmax ints.
+    stdHepFd = array("i", [0] * kNPmax)
+    stdHepLd = array("i", [0] * kNPmax)
+    stdHepFm = array("i", [0] * kNPmax)
+    stdHepLm = array("i", [0] * kNPmax)
+    
+    # -------------------------------
+    # Create branches in the tree.
+    # -------------------------------
+    tree.Branch("EvtFlags", evtFlags)
+    tree.Branch("EvtCode", evtCode)
+    tree.Branch("EvtNum", evtNum, "EvtNum/I")
+    tree.Branch("EvtXSec", evtXSec, "EvtXSec/D")
+    tree.Branch("EvtDXSec", evtDXSec, "EvtDXSec/D")
+    tree.Branch("EvtWght", evtWght, "EvtWght/D")
+    tree.Branch("EvtProb", evtProb, "EvtProb/D")
+    tree.Branch("EvtVtx", evtVtx, "EvtVtx[4]/D")
+    tree.Branch("StdHepN", stdHepN, "StdHepN/I")
+    tree.Branch("StdHepPdg", stdHepPdg, "StdHepPdg[{}]/I".format(kNPmax))
+    tree.Branch("StdHepStatus", stdHepStatus, "StdHepStatus[{}]/I".format(kNPmax))
+    tree.Branch("StdHepRescat", stdHepRescat, "StdHepRescat[{}]/I".format(kNPmax))
+    tree.Branch("StdHepX4", stdHepX4, "StdHepX4[{}][4]/D".format(kNPmax))
+    tree.Branch("StdHepP4", stdHepP4, "StdHepP4[{}][4]/D".format(kNPmax))
+    tree.Branch("StdHepPolz", stdHepPolz, "StdHepPolz[{}][3]/D".format(kNPmax))
+    tree.Branch("StdHepFd", stdHepFd, "StdHepFd[{}]/I".format(kNPmax))
+    tree.Branch("StdHepLd", stdHepLd, "StdHepLd[{}]/I".format(kNPmax))
+    tree.Branch("StdHepFm", stdHepFm, "StdHepFm[{}]/I".format(kNPmax))
+    tree.Branch("StdHepLm", stdHepLm, "StdHepLm[{}]/I".format(kNPmax))
+    
+    # -------------------------------
+    # Fill the tree with events.
+    # -------------------------------
+    # For demonstration, add 17 muons for each event.
+    
+    for i_event in range(n_events_per_file):
+        # Event-level variables:
+        evtNum[0] = i_event
+        
+        # Set EvtXSec using a lognormal distribution with mean 23 and std 55.
+        evtXSec[0] = -1#random.lognormvariate(mu_xsec, sigma_xsec)  #This guy doesn't matter at all 
+        
+        # EvtDXSec remains as before (or you can set it as desired; here we leave it uniform)
+        evtDXSec[0] = -1#random.uniform(0.05, 0.5)*100 #This guy also doesn't matter at all 
+        
+        # Set evtWght fixed at 1.
+        evtWght[0] = 1
+        
+        # Set evtProb from a lognormal distribution for EvtProb.
+        evtProb[0] = -1#1000*random.lognormvariate(mu_prob, sigma_prob) #This guy doesn't matter at all 
+        
+        # Vertex position in the detector coordinate system (meters & seconds)
+        evtVtx[0] = random.uniform(-0.6, 0.6)  # x (m)
+        evtVtx[1] = random.uniform(-0.6, 0.6)   # y (m)
+        evtVtx[2] = random.uniform(-0.6, 0.6)  # z (m)
+        evtVtx[3] = random.uniform(0.0, 1e-8)   # t (s)
+    
+        # For each event, EvtFlags is reset to all zeros (16 bits, 2 bytes).
+        evtFlags.ResetAllBits()  # Always zero.
+    
+        # Set the event code string to the fixed format.
+        evtCode.SetString("nu:14;tgt:1000180400;N:2112;q:1(v);proc:Weak[CC],DIS;") #This is for argon target 
+
+    
+        stdHepN[0] = n_particles
+    
+        # Fill particle-level branches.
+        for ip in range(kNPmax):
+            if ip==0:
+                # Choose a PDG code at random from the list
+                nucleusPDG = 1000180400
+                pdg = nucleusPDG
+                stdHepPdg[ip] = pdg
+                stdHepStatus[ip] = 0    # initial state
+                stdHepRescat[ip] = -1    # no rescattering
+    
+                # For StdHepX4: generate a 4-position in fm.
+                for j in range(3):
+                    stdHepX4[ip*4 + j] = random.uniform(0, 3.0)
+                stdHepX4[ip*4 + 3] = 0.0
+    
+                # For StdHepP4: generate a momentum in GeV.
+                p = 0
+                theta = random.uniform(0, math.pi)
+                phi = random.uniform(0, 2*math.pi)
+                px = p * math.sin(theta) * math.cos(phi)
+                py = p * math.sin(theta) * math.sin(phi)
+                pz = p * math.cos(theta)
+                m = 52.06
+                energy = math.sqrt(p*p + m*m)
+                stdHepP4[ip*4 + 0] = px
+                stdHepP4[ip*4 + 1] = py
+                stdHepP4[ip*4 + 2] = pz
+                stdHepP4[ip*4 + 3] = energy
+                
+    
+                # For StdHepPolz: generate a polarization vector (3 components).
+                for j in range(3):
+                    stdHepPolz[ip*3 + j] = random.uniform(-1.0, 1.0)
+    
+                # For daughter/mother indices: set to 0 (none).
+                stdHepFd[ip] = 2
+                stdHepLd[ip] = n_particles-1
+                stdHepFm[ip] = 0
+                stdHepLm[ip] = 0             
+            else:
+                if ip ==1:
+                    # Choose a PDG code at random from the list
+                    nucleusPDG = -14
+                    pdg = nucleusPDG
+                    stdHepPdg[ip] = pdg
+                    stdHepStatus[ip] = 0    # initial state
+                    stdHepRescat[ip] = -1    # no rescattering
+        
+                    # For StdHepX4: generate a 4-position in fm.
+                    for j in range(3):
+                        stdHepX4[ip*4 + j] = random.uniform(0, 3.0)
+                    stdHepX4[ip*4 + 3] = 0.0
+        
+                    # For StdHepP4: generate a momentum in GeV.
+                    p = 0
+                    #theta = random.uniform(0, math.pi)
+                    #phi = random.uniform(0, 2*math.pi)
+                    # Randomly select one of the predefined directions
+                    theta = 0
+                    phi = 0
+                    px = p * math.sin(theta) * math.cos(phi)
+                    py = p * math.sin(theta) * math.sin(phi)
+                    pz = p * math.cos(theta)
+                    m = 0
+                    energy = math.sqrt(p*p + m*m)
+                    stdHepP4[ip*4 + 0] = px
+                    stdHepP4[ip*4 + 1] = py
+                    stdHepP4[ip*4 + 2] = pz
+                    stdHepP4[ip*4 + 3] = energy
+                    
+                    # For StdHepPolz: generate a polarization vector (3 components).
+                    for j in range(3):
+                        stdHepPolz[ip*3 + j] = random.uniform(-1.0, 1.0)
+        
+                    # For daughter/mother indices: set to 0 (none).
+                    stdHepFd[ip] = 2
+                    stdHepLd[ip] = n_particles-1
+                    stdHepFm[ip] = 0
+                    stdHepLm[ip] = 0    
+                else: 
+                    if ip < n_particles:
+                        # Choose a PDG code at random from the list.
+                        pdg = random.choice(pdg_choices)
+                        stdHepPdg[ip] = pdg
+                        stdHepStatus[ip] = 1    # final state
+                        stdHepRescat[ip] = -1    # no rescattering modify properly for pions 
+            
+                        # For StdHepX4: generate a 4-position in fm.
+                        for j in range(3):
+                            stdHepX4[ip*4 + j] = random.uniform(-10.0, 10.0)
+                        stdHepX4[ip*4 + 3] = 0.0
+            
+                        # For StdHepP4: generate a momentum in GeV.
+                        #p = random.choice(LeptonEnergies)
+                        p = random.uniform(0.0001, 0.1)
+                        theta,phi = random.choice(LeptonDirections)
+                        px = p * math.sin(theta) * math.cos(phi)
+                        py = p * math.sin(theta) * math.sin(phi)
+                        pz = p * math.cos(theta)
+                        m = mass_dict.get(pdg, 0.0)
+                        energy = math.sqrt(p*p + m*m)
+                        stdHepP4[ip*4 + 0] = px
+                        stdHepP4[ip*4 + 1] = py
+                        stdHepP4[ip*4 + 2] = pz
+                        stdHepP4[ip*4 + 3] = energy
+                        # For StdHepPolz: generate a polarization vector (3 components).
+                        for j in range(3):
+                            stdHepPolz[ip*3 + j] = random.uniform(-1.0, 1.0)
+            
+                        # For daughter/mother indices: set to 0 (none).
+                        stdHepFd[ip] = 0
+                        stdHepLd[ip] = 0
+                        stdHepFm[ip] = 0
+                        stdHepLm[ip] = 0
+                    else:
+                        stdHepPdg[ip] = 0
+                        stdHepStatus[ip] = 0
+                        stdHepRescat[ip] = 0
+                        for j in range(4):
+                            stdHepX4[ip*4 + j] = 0.0
+                            stdHepP4[ip*4 + j] = 0.0
+                        for j in range(3):
+                            stdHepPolz[ip*3 + j] = 0.0
+                        stdHepFd[ip] = -1
+                        stdHepLd[ip] = -1
+                        stdHepFm[ip] = 1
+                        stdHepLm[ip] = 1
+    
+        # Fill the tree for this event.
+        tree.Fill()
+    
+    # Write out the tree and close the file.
+    tree.Write()
+    outfile.Close()
+    
+    print("Realistic fake GTRAC file '{}' created with {} events.".format(filename, n_events_per_file))
